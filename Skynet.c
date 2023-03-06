@@ -1,6 +1,6 @@
 #include <ntifs.h>
 #include <wdf.h>
-#include <wdm.h>     
+#include <wdm.h>    
 #include "offsets.h"
 #include "Common.h"
 
@@ -41,6 +41,8 @@ DriverUnload(PDRIVER_OBJECT DriverObject);
 #pragma alloc_text(INIT, DriverEntry)
 #pragma alloc_text(PAGE, DriverUnload)
 
+
+static PUNICODE_STRING targetProcessName;
 
 static ULONGLONG KERNEL_BASE = 0;
 
@@ -163,6 +165,9 @@ DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
 	UNICODE_STRING DriverName, DosDeviceName;
 	DbgPrint("[SKYNET]: Loading Skynet");
 
+
+	RtlInitUnicodeString(targetProcessName, L"dummy.exe");
+
 	RtlInitUnicodeString(&DriverName, L"\\Device\\SKYNET");
 	RtlInitUnicodeString(&DosDeviceName, L"\\DosDevices\\SKYNET");
 
@@ -255,7 +260,42 @@ NTSTATUS listRunningProcesses() {
 	return  STATUS_SUCCESS;
 }
 
- 
+UINT32 findProcessByModuleName(PUNICODE_STRING name) {
+	ZwQuerySystemInformation pointer;
+	UINT32 pid;
+	UNICODE_STRING zwquery;
+	RtlInitUnicodeString(&zwquery, L"ZwQuerySystemInformation");
+	PVOID zwQueryAddr = MmGetSystemRoutineAddress(&zwquery);
+	ULONG outLength;
+	if (!zwQueryAddr)
+
+	{
+		DbgPrint("[Skynet_findProcessByModuleName] : failed to find ZwQuerySystemInformation");
+		return STATUS_INTERNAL_ERROR;
+
+	}
+	pointer = (ZwQuerySystemInformation)zwQueryAddr;
+	PVOID buffer = ExAllocatePool2(POOL_FLAG_NON_PAGED, MODULE_BUFFER_SIZE, DRIVER_MEM_TAG);
+	NTSTATUS outcome = (*pointer) (SYSTEM_PROCESS_INFORMATION, buffer, MODULE_BUFFER_SIZE, &outLength);
+	if (!NT_SUCCESS(outcome)) {
+		ExFreePoolWithTag(buffer, DRIVER_MEM_TAG);
+		return 0;
+	}
+	SYSTEM_PROCESS_INFORMATION_STRUCT* currentProcessInfo = (SYSTEM_PROCESS_INFORMATION_STRUCT*)buffer;
+	while (1) {
+		if (wcsstr(&currentProcessInfo->ImageName, targetProcessName)) {
+			pid = currentProcessInfo->UniqueProcessId;
+			DbgPrint("[SKYNET] : found the target process, pid [%d]\n", pid);
+			goto free;
+		}
+		if (!currentProcessInfo->NextEntryOffset) break;
+		currentProcessInfo = (SYSTEM_PROCESS_INFORMATION_STRUCT*)((BYTE*)currentProcessInfo + currentProcessInfo->NextEntryOffset);
+	}
+free:
+	ExFreePool(buffer);
+	return pid;
+}
+
 
 NTSTATUS MmWritePhysical(PVOID targetAddress, PVOID sourceAddress, size_t size)
 {
@@ -311,10 +351,10 @@ void discover_paging_mode() {
 }
 
 //TODO make this dynamic by walking the process list
-#define PID 6644
 #define PCIDE_BIT (1<<17)
 void navigate_cr3() {
-	attachToProcess(PID); //should always be System.exe
+	UINT32 pid = findProcessByModuleName(targetProcessName);
+	attachToProcess(pid); //should always be System.exe
 	UINT64 cr3 = __readcr3();
 	UINT64 PCID_ENABLED = __readcr4() && PCIDE_BIT;
 	if (PCID_ENABLED) DbgPrint("[SKYNET] PCID disabled");
@@ -348,7 +388,7 @@ void navigate_cr3() {
 	unsigned long long* walkableBuffer = (unsigned long long*) buffer;
 
 	PPML4E plm4_table = (PPML4E)walkableBuffer;
-	DbgPrintEx(0, 0, "[SKYNET] Reading [0x%llx] in the PLM4 table",plm4_table->Value);	/*for (unsigned short i = 0; i < PLM4_BUFF_SIZE / sizeof(unsigned long long); i++)
+	DbgPrintEx(0, 0, "[SKYNET] Reading [0x%llx] in the PLM4 table", plm4_table->Value);	/*for (unsigned short i = 0; i < PLM4_BUFF_SIZE / sizeof(unsigned long long); i++)
 		DbgPrintEx(0, 0, "[SKYNET] Reading [%d] [0x%llx]", i, *walkableBuffer++);*/
 
 	detachFromProcess();
