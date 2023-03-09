@@ -118,6 +118,7 @@
     <ClInclude Include="Common.h" />
     <ClInclude Include="Mem.h" />
     <ClInclude Include="offsets.h" />
+    <ClInclude Include="Utils.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

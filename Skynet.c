@@ -3,6 +3,7 @@
 #include <wdm.h>    
 #include "offsets.h"
 #include "Common.h"
+#include "Utils.h"
 
 #define SYSTEM_PROCESS_INFORMATION 0x05
 #define SYSTEM_MODULE_INFORMATION 0x0B
@@ -42,7 +43,6 @@ DriverUnload(PDRIVER_OBJECT DriverObject);
 #pragma alloc_text(PAGE, DriverUnload)
 
 
-static PUNICODE_STRING targetProcessName;
 
 static ULONGLONG KERNEL_BASE = 0;
 
@@ -89,7 +89,6 @@ NTSTATUS getLoadedModules() {
 			DbgPrintEx(0, 0, "Module name [%s]\n", ((char*)modulesArray->FullPathName + modulesArray->OffsetToFileName));
 			modulesArray++;
 		}
-
 		ExFreePoolWithTag(buffer, DRIVER_MEM_TAG);
 
 	}
@@ -166,7 +165,7 @@ DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
 	DbgPrint("[SKYNET]: Loading Skynet");
 
 
-	RtlInitUnicodeString(targetProcessName, L"dummy.exe");
+
 
 	RtlInitUnicodeString(&DriverName, L"\\Device\\SKYNET");
 	RtlInitUnicodeString(&DosDeviceName, L"\\DosDevices\\SKYNET");
@@ -260,40 +259,60 @@ NTSTATUS listRunningProcesses() {
 	return  STATUS_SUCCESS;
 }
 
-UINT32 findProcessByModuleName(PUNICODE_STRING name) {
+
+
+
+
+
+NTSTATUS findProcessByModuleName(PUNICODE_STRING name, _Inout_ PINT32 pid) {
 	ZwQuerySystemInformation pointer;
-	UINT32 pid;
 	UNICODE_STRING zwquery;
 	RtlInitUnicodeString(&zwquery, L"ZwQuerySystemInformation");
 	PVOID zwQueryAddr = MmGetSystemRoutineAddress(&zwquery);
-	ULONG outLength;
+
+	ULONG outLength = 0;
 	if (!zwQueryAddr)
 
 	{
-		DbgPrint("[Skynet_findProcessByModuleName] : failed to find ZwQuerySystemInformation");
+		DbgPrint("[Skynet] : findProcessByModuleName : failed to find ZwQuerySystemInformation");
 		return STATUS_INTERNAL_ERROR;
 
 	}
 	pointer = (ZwQuerySystemInformation)zwQueryAddr;
-	PVOID buffer = ExAllocatePool2(POOL_FLAG_NON_PAGED, MODULE_BUFFER_SIZE, DRIVER_MEM_TAG);
-	NTSTATUS outcome = (*pointer) (SYSTEM_PROCESS_INFORMATION, buffer, MODULE_BUFFER_SIZE, &outLength);
-	if (!NT_SUCCESS(outcome)) {
-		ExFreePoolWithTag(buffer, DRIVER_MEM_TAG);
-		return 0;
+	SIZE_T BUFFER_SIZE = MODULE_BUFFER_SIZE * 10;
+
+	PVOID buffer = ExAllocatePool2(POOL_FLAG_NON_PAGED, BUFFER_SIZE, DRIVER_MEM_TAG);
+	if (!buffer) {
+
+		DbgPrint("[SKYNET] : failed to allocate memory\n");
+		return STATUS_INSUFFICIENT_RESOURCES;
+
 	}
+	NTSTATUS outcome = (*pointer) (SYSTEM_PROCESS_INFORMATION, buffer, BUFFER_SIZE, &outLength);
+	if (!NT_SUCCESS(outcome)) {
+		DbgPrintEx(0, 0, "[SKYNET] : Failed to query ZwQuerySystemInformation status code :[%d] lenght [%ul]\n", outcome, outLength);
+		if (outLength)
+			DbgPrintEx(0, 0, "[SKYNET] Buffer size mismatch of [%lld]\n", outLength - BUFFER_SIZE);
+		goto free;
+	}
+	if (outLength)
+		DbgPrintEx(0, 0, "[SKYNET] ZwQuerySystemInformation returned an outlength value of [%llu]\n", outLength);
 	SYSTEM_PROCESS_INFORMATION_STRUCT* currentProcessInfo = (SYSTEM_PROCESS_INFORMATION_STRUCT*)buffer;
 	while (1) {
-		if (wcsstr(&currentProcessInfo->ImageName, targetProcessName)) {
-			pid = currentProcessInfo->UniqueProcessId;
-			DbgPrint("[SKYNET] : found the target process, pid [%d]\n", pid);
+		DbgPrintEx(0, 0, "[SKYNET] : currentProcess [%wZ]\n", currentProcessInfo->ImageName);
+		//if (RtlCompareUnicodeString(&currentProcessInfo->ImageName, name, TRUE) == 0)
+		//	__debugbreak();
+		if (isSubstring(&currentProcessInfo->ImageName, name)) {
+			*pid = currentProcessInfo->UniqueProcessId;
+			DbgPrintEx(0, 0, "[SKYNET] : found the target process, pid [%d]\n", *pid);
 			goto free;
 		}
 		if (!currentProcessInfo->NextEntryOffset) break;
-		currentProcessInfo = (SYSTEM_PROCESS_INFORMATION_STRUCT*)((BYTE*)currentProcessInfo + currentProcessInfo->NextEntryOffset);
+		currentProcessInfo = (SYSTEM_PROCESS_INFORMATION_STRUCT*)(((BYTE*)currentProcessInfo) + currentProcessInfo->NextEntryOffset);
 	}
 free:
 	ExFreePool(buffer);
-	return pid;
+	return *pid == 0 ? STATUS_FAIL_CHECK : STATUS_SUCCESS;
 }
 
 
@@ -353,44 +372,48 @@ void discover_paging_mode() {
 //TODO make this dynamic by walking the process list
 #define PCIDE_BIT (1<<17)
 void navigate_cr3() {
-	UINT32 pid = findProcessByModuleName(targetProcessName);
-	attachToProcess(pid); //should always be System.exe
+	UINT32 pid = 0;
+	UNICODE_STRING targetProcessName;
+	RtlInitUnicodeString(&targetProcessName, L"Dbgview.exe");
+	NTSTATUS outcome = findProcessByModuleName(&targetProcessName, &pid);
+	if (!NT_SUCCESS(outcome)) {
+		DbgPrintEx(0, 0, "[SKYNET]: failed to find target process [%wZ]", &targetProcessName);
+		return;
+	}
+
+	attachToProcess(pid); //should always be Dbgview.exe 
+
 	UINT64 cr3 = __readcr3();
 	UINT64 PCID_ENABLED = __readcr4() && PCIDE_BIT;
-	if (PCID_ENABLED) DbgPrint("[SKYNET] PCID disabled");
-	else DbgPrint("[SKYNET] PCIDs disabled");
+	if (PCID_ENABLED) DbgPrint("[SKYNET] : PCID enabled");
+	else DbgPrint("[SKYNET] : PCIDs disabled");
 	//discover CR4.PCIDE
 	//bits 52-11 determine the physical address of the table
-	UINT64 physical_table_address = cr3 & (0xFFFFFFFFFF000000);
-	DbgPrintEx(0, 0, "[SKYNET] value of cr3 [0x%llx]", cr3);
-	DbgPrintEx(0, 0, "[SKYNET] Physical address of the PLM4 table [0x%llx]", physical_table_address);
+	UINT64 physical_table_address = cr3 & (0xFFFFFFFFFFFF0000);
+	DbgPrintEx(0, 0, "[SKYNET] : value of cr3 [0x%llx]", cr3);
+	DbgPrintEx(0, 0, "[SKYNET] : Physical address of the PLM4 table [0x%llx]", physical_table_address);
 #define PLM4_BUFF_SIZE 0x1000
-	void* buffer = ExAllocatePool2(POOL_FLAG_NON_PAGED, PLM4_BUFF_SIZE, DRIVER_MEM_TAG);
+	ULONG64* buffer = ExAllocatePool2(POOL_FLAG_NON_PAGED, PLM4_BUFF_SIZE, DRIVER_MEM_TAG);
 	if (!buffer)
 
 	{
 		DbgPrint("[SKYNET] : Failed to allocate memory");
 		return;
 	}
+
 	MM_COPY_ADDRESS phys_addr_MM;
 	PHYSICAL_ADDRESS p_add;
 	p_add.QuadPart = physical_table_address;
 	phys_addr_MM.PhysicalAddress = p_add;
 	SIZE_T out;
 	NTSTATUS memAccessOutcome = MmCopyMemory(buffer, phys_addr_MM, PLM4_BUFF_SIZE, MM_COPY_MEMORY_PHYSICAL, &out);
+	__debugbreak();
 	if (!NT_SUCCESS(memAccessOutcome))
 
 	{
 		DbgPrint("[SKYNET] : Failed to read physical memory address");
-		goto free;
 	}
 	else DbgPrint("[SKYNET] : Accessed physical memory successfully");
-	unsigned long long* walkableBuffer = (unsigned long long*) buffer;
-
-	PPML4E plm4_table = (PPML4E)walkableBuffer;
-	DbgPrintEx(0, 0, "[SKYNET] Reading [0x%llx] in the PLM4 table", plm4_table->Value);	/*for (unsigned short i = 0; i < PLM4_BUFF_SIZE / sizeof(unsigned long long); i++)
-		DbgPrintEx(0, 0, "[SKYNET] Reading [%d] [0x%llx]", i, *walkableBuffer++);*/
-
 	detachFromProcess();
 free:
 	ExFreePool(buffer);
@@ -470,6 +493,36 @@ NTSTATUS DispatchCreateClose(
 	Irp->IoStatus.Information = 0;
 	IoCompleteRequest(Irp, IO_NO_INCREMENT);
 	return STATUS_SUCCESS;
+}
+
+
+#define KERNEL_IMAGE_SIZE 10'854'240
+ULONG64 findPattern(ULONG64 kernelBase, unsigned char* pattern, SHORT patternLength) {
+	//dumb version starting from the base of the kernel
+	//a pattern cannot start with a ?
+	//iterating past the kernel image -> should it be considered if the pattern is valid?
+	BYTE* ntosKrnlPtr;
+	ULONG64 start; USHORT matchRegion;
+	ntosKrnlPtr = (BYTE*)kernelBase;
+	unsigned char* orig = pattern;
+restart:
+	if (ntosKrnlPtr - kernelBase >= KERNEL_IMAGE_SIZE) return 0;
+	pattern = orig;
+	__debugbreak();
+	while ((*pattern++ != *ntosKrnlPtr++));
+	start = ntosKrnlPtr - 1;
+	matchRegion = 0;
+	while ((*pattern == '?') || (*pattern == *ntosKrnlPtr))
+	{
+		pattern++;
+		ntosKrnlPtr++;
+		matchRegion++;
+	}
+	if (matchRegion == patternLength) return start;
+	else goto restart;
+	return 0;
+
+
 }
 
 
