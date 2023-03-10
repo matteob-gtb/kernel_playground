@@ -238,8 +238,7 @@ DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
 	  0x41, 0x57, 0x48, 0x81, 0xEC, 0x10, 0x04, 0x00, 0x00, 0x48,
 	  0x8B, 0x05, 0x46, 0xA7, 0x58, 0x00, 0x48, 0x33, 0xC4, 0x48,
 	  0x89, 0x84, 0x24, 0x00, 0x04, 0x00, 0x00, 0x49, 0x8B, 0xF9,
-	  0x4C, 0x89, 0x4C, 0x24, 0x60, 0x4C, 0x89, 0x84, 0x24, 0x88,
-	  0x00, 0x00, 0x00
+	  0x4C, 0x89, 0x4C, 0x24, 0x60, 0x4C, 0x89, 0x84, 0x24, 0x88
 	};
 	ULONG64 krnlAddress = 0;
 	unsigned char kernelName[] = "ntoskrnl.exe\0";
@@ -254,10 +253,10 @@ DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
 #endif // DEBUG
 		goto skip;
 	}
-	__debugbreak();
-
+ 
 	ULONG64 patternAddress = findPattern(krnlAddress, MmCopyVirtualMemoryPattern, sizeof(MmCopyVirtualMemoryPattern));
 
+	DbgPrintEx(0, 0, "[SKYNET] : findPattern returned [%llu]\n", patternAddress);
 
 skip:
 
@@ -601,25 +600,29 @@ ULONG64 findPattern(ULONG64 kernelBase, unsigned char* pattern, SHORT patternLen
 	unsigned char* patternOld = pattern;
 	unsigned char* ntosKrnlPtr;
 	ULONG64 start; USHORT matchRegion;
+	ULONG64 upperLimit = kernelBase + KERNEL_IMAGE_SIZE;
 	ntosKrnlPtr = (unsigned char*)kernelBase;
 	if (!ntosKrnlPtr) return 0;
 	unsigned char* orig = pattern;
-restart:
-	if (ntosKrnlPtr - kernelBase >= KERNEL_IMAGE_SIZE) return 0;
-	pattern = orig;
-	while ((*ntosKrnlPtr != *pattern))
-		ntosKrnlPtr++;
-	__debugbreak();
-	start = ntosKrnlPtr;
-	matchRegion = 0;
-	while (((*pattern == '?') || (*pattern == *ntosKrnlPtr)) && matchRegion < patternLength)
+
+	while (ntosKrnlPtr < upperLimit)
 	{
-		pattern++;
-		ntosKrnlPtr++;
-		matchRegion++;
+		pattern = orig;
+		while ((*ntosKrnlPtr != *pattern)) //iterate until you find the first byte of the pattern
+			ntosKrnlPtr++;
+		start = ntosKrnlPtr; //start address of the pattern
+		matchRegion = 0;
+		//iterate until you find matching bytes
+		while (((*pattern == '?') || (*pattern == *ntosKrnlPtr)) && matchRegion < patternLength)
+		{
+			pattern++;
+			ntosKrnlPtr++;
+			matchRegion++;
+		}
+		if (matchRegion >= patternLength >> 1)
+			__debugbreak();
+		if (matchRegion == patternLength) return start;
 	}
-	if (matchRegion == patternLength) return start;
-	else goto restart;
 	return 0;
 
 
