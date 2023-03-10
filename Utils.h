@@ -1,6 +1,34 @@
 #pragma once
 #include  <ntifs.h>
 
+BOOLEAN isSubstring(_In_ PUNICODE_STRING original, _In_ PUNICODE_STRING substring);
+BOOLEAN isSubstringClassic(_In_ PUCHAR original, _In_ PUCHAR substring);
+
+#define DEBUG_UTILS
+
+BOOLEAN isSubstringClassic(_In_ PUCHAR original, _In_ PUCHAR substring) {
+	PUCHAR copySub = substring;
+	BOOLEAN equal = FALSE;
+	if (!original || !substring)
+
+	{
+#ifdef DEBUG_UTILS
+		DbgPrint("[SKYNET] : bad pointers passed to isSubString\n");
+#endif // DEBUG
+		return FALSE;
+	}
+	USHORT matchRegion = 1;
+	while (*original && *original++ != *substring);
+	substring++;
+	while ((*original && *substring) && (*original++ == *substring++))
+		matchRegion++;
+	if (matchRegion == (substring - copySub)) return TRUE;
+	return FALSE;
+
+
+
+}
+
 BOOLEAN isSubstring(_In_ PUNICODE_STRING original, _In_ PUNICODE_STRING substring) {
 	BOOLEAN equal = FALSE;
 	if (!original || !substring)
@@ -9,7 +37,6 @@ BOOLEAN isSubstring(_In_ PUNICODE_STRING original, _In_ PUNICODE_STRING substrin
 		DbgPrint("[SKYNET] : bad pointers passed to isSubString\n");
 		return FALSE;
 	}
-	DbgPrintEx(0, 0, "[SKYNET] : First [%wZ] Second [%wZ]\n", original, substring);
 	unsigned char* orig = (unsigned char*)original->Buffer, * sub = (unsigned char*)substring->Buffer;
 	short maxLength = min(original->Length, substring->Length);
 	if (maxLength == 0 && substring->Length != 0) return FALSE;

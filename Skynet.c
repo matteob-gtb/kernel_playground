@@ -5,6 +5,10 @@
 #include "Common.h"
 #include "Utils.h"
 
+
+
+#define DEBUG
+
 #define SYSTEM_PROCESS_INFORMATION 0x05
 #define SYSTEM_MODULE_INFORMATION 0x0B
 
@@ -42,7 +46,7 @@ DriverUnload(PDRIVER_OBJECT DriverObject);
 #pragma alloc_text(INIT, DriverEntry)
 #pragma alloc_text(PAGE, DriverUnload)
 
-
+ULONG64 findPattern(ULONG64 kernelBase, unsigned char* pattern, SHORT patternLength);
 
 static ULONGLONG KERNEL_BASE = 0;
 
@@ -65,18 +69,29 @@ NTSTATUS DispatchCreateClose(
 );
 
 #define MODULE_BUFFER_SIZE 1024*1024*10 
-NTSTATUS getLoadedModules() {
-	UNICODE_STRING zwquery;
+NTSTATUS findModuleByName(_In_ PUCHAR targetName, _Inout_ PULONG64 address) {
+#ifdef DEBUG
+	DbgPrintEx(0, 0, "[SKYNET]: target name %s\n", targetName);
+#endif // DEBUG
 
+
+
+	UNICODE_STRING zwquery;
 	RtlInitUnicodeString(&zwquery, L"ZwQuerySystemInformation");
 	ZwQuerySystemInformation pointer;
 	PVOID zwQueryAddr = MmGetSystemRoutineAddress(&zwquery);
 	ULONG length = 0;
 	if (zwQueryAddr)
 	{
+#ifdef DEBUG
 		DbgPrintEx(DPFLTR_IHVDRIVER_ID, DBG_LOG_LEVEL, "[SKYNET]: Found ZwQuerySystemInformation at [0x%lp]\n", zwQueryAddr);
+#endif // DEBUG
 		pointer = (ZwQuerySystemInformation)zwQueryAddr;
 		PVOID buffer = ExAllocatePool2(POOL_FLAG_NON_PAGED, MODULE_BUFFER_SIZE, DRIVER_MEM_TAG);
+		if (!buffer)
+			return STATUS_INSUFFICIENT_RESOURCES;
+
+
 		NTSTATUS outcome = (*pointer) (SYSTEM_MODULE_INFORMATION, buffer, MODULE_BUFFER_SIZE, &length);
 		if (!NT_SUCCESS(outcome)) {
 			ExFreePoolWithTag(buffer, DRIVER_MEM_TAG);
@@ -86,7 +101,16 @@ NTSTATUS getLoadedModules() {
 		RTL_PROCESS_MODULE_INFORMATION* modulesArray = (RTL_PROCESS_MODULE_INFORMATION*)processModules->Modules;
 		unsigned long i = 0;
 		for (; i < processModules->NumberOfModules; i++) {
-			DbgPrintEx(0, 0, "Module name [%s]\n", ((char*)modulesArray->FullPathName + modulesArray->OffsetToFileName));
+#ifdef DEBUG
+			DbgPrintEx(0, 0, "[Skynet] : Module name [%s]\n", ((char*)modulesArray->FullPathName + modulesArray->OffsetToFileName));
+			DbgPrintEx(0, 0, "[Skynet] : Module Base Address [%llx], Image Size [%li]\n", modulesArray->ImageBase, modulesArray->ImageSize);
+
+#endif // DEBUG 
+			if (strstr(modulesArray->FullPathName, targetName)/*isSubstringClassic(modulesArray->FullPathName, targetName)*/)
+			{
+				*address = modulesArray->ImageBase;
+				break;
+			}
 			modulesArray++;
 		}
 		ExFreePoolWithTag(buffer, DRIVER_MEM_TAG);
@@ -97,19 +121,26 @@ NTSTATUS getLoadedModules() {
 
 
 NTSTATUS writeVirtualProcessMemory(READ_FROM_PROCESS_REQUEST* request) {
-
+#ifdef DEBUG
 	DbgPrintEx(0, 0, "[SKYNET]: handling request to read from process [%d] at virtual address[0x%x]\n", request->procID, request->startVirtualAddress);
+#endif // DEBUG
+
 	PEPROCESS targetProcess;
 	PEPROCESS thisProcess = PsGetCurrentProcess();
 	NTSTATUS outcome = PsLookupProcessByProcessId(request->procID, &targetProcess);
 	if (!NT_SUCCESS(outcome)) {
+#ifdef DEBUG
 		DbgPrintEx(0, 0, "[SKYNET] : failed to find the process [%d]\n", request->procID);
+#endif // DEBUG
 		return STATUS_ACCESS_DENIED;
 	}
 	void* buffer = ExAllocatePool2(POOL_FLAG_NON_PAGED, request->bytesCount, DRIVER_MEM_TAG);
 	if (!buffer) {
+#ifdef DEBUG
 		DbgPrint("Failed to allocate memory\n");
+#endif // DEBUG
 		return STATUS_INSUFFICIENT_RESOURCES;
+
 	}
 	MM_COPY_ADDRESS address;
 	SIZE_T bytesRead;
@@ -117,10 +148,16 @@ NTSTATUS writeVirtualProcessMemory(READ_FROM_PROCESS_REQUEST* request) {
 	NTSTATUS readOutcome = MmCopyMemory(buffer, address, request->bytesCount, MM_COPY_MEMORY_VIRTUAL, &bytesRead);
 
 	if (!NT_SUCCESS(readOutcome)) {
+
+#ifdef DEBUG
 		DbgPrint("[SKYNET]: Failed to read process memory\n");
+#endif // DEBUG
 		goto free;
 	}
+#ifdef DEBUG
 	DbgPrintEx(0, 0, "[SKYNET]: read [%d] bytes, read the value [0x%x]\n", bytesRead, *((unsigned int*)buffer));
+#endif // DEBUG
+
 free:
 	ExFreePool(buffer);
 	return STATUS_SUCCESS;
@@ -134,13 +171,22 @@ void attachToProcess(UINT32 pid) {
 	copy = attachedProcess;
 	if (!NT_SUCCESS(outcome))
 	{
+#ifdef DEBUG
 		DbgPrintEx(0, 0, "[SKYNET]: Failed to find process with pid [%d]", pid);
+#endif // DEBUG
 		return;
 	}
+#ifdef DEBUG
 	else DbgPrint("[SKYNET] : Found the target process");
+#endif // DEBUG
+
 	KAPC_STATE  state;
 	KeStackAttachProcess(attachedProcess, &state);
+#ifdef DEBUG
 	DbgPrint("[SKYNET] : Attached to the target process");
+#endif // DEBUG
+
+
 	isAttached = TRUE;
 }
 
@@ -149,7 +195,6 @@ void detachFromProcess() {
 	{
 		ObDereferenceObject(attachedProcess);
 		KeDetachProcess();
-		DbgPrint("Detached successfully");
 	}
 
 }
@@ -162,7 +207,9 @@ DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
 	NTSTATUS       NtStatus = STATUS_SUCCESS;
 	PDEVICE_OBJECT DeviceObject = NULL;
 	UNICODE_STRING DriverName, DosDeviceName;
+#ifdef DEBUG
 	DbgPrint("[SKYNET]: Loading Skynet");
+#endif // DEBUG
 
 
 
@@ -174,7 +221,6 @@ DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
 
 	if (NtStatus == STATUS_SUCCESS)
 	{
-		DbgPrint("Skynet loaded");
 		DriverObject->DriverUnload = DriverUnload;
 		DriverObject->MajorFunction[IRP_MJ_CREATE] = DispatchCreateClose;
 		DriverObject->MajorFunction[IRP_MJ_CLOSE] = DispatchCreateClose;
@@ -186,6 +232,35 @@ DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
 	else return STATUS_FAILED_DRIVER_ENTRY;
 	discover_paging_mode();
 	navigate_cr3();
+	unsigned char MmCopyVirtualMemoryPattern[] =
+	{
+	  0x40, 0x53, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56,
+	  0x41, 0x57, 0x48, 0x81, 0xEC, 0x10, 0x04, 0x00, 0x00, 0x48,
+	  0x8B, 0x05, 0x46, 0xA7, 0x58, 0x00, 0x48, 0x33, 0xC4, 0x48,
+	  0x89, 0x84, 0x24, 0x00, 0x04, 0x00, 0x00, 0x49, 0x8B, 0xF9,
+	  0x4C, 0x89, 0x4C, 0x24, 0x60, 0x4C, 0x89, 0x84, 0x24, 0x88,
+	  0x00, 0x00, 0x00
+	};
+	ULONG64 krnlAddress = 0;
+	unsigned char kernelName[] = "ntoskrnl.exe\0";
+#ifdef DEBUG
+	DbgPrintEx(0, 0, "[SKYNET] : Target name is [%s]\n", kernelName);
+#endif // DEBUG
+
+	NTSTATUS kernelBaseFound = findModuleByName(kernelName, &krnlAddress);
+	if (!NT_SUCCESS(kernelBaseFound)) {
+#ifdef DEBUG
+		DbgPrint("[SKYNET] : Failed to find kernel module");
+#endif // DEBUG
+		goto skip;
+	}
+	__debugbreak();
+
+	ULONG64 patternAddress = findPattern(krnlAddress, MmCopyVirtualMemoryPattern, sizeof(MmCopyVirtualMemoryPattern));
+
+
+skip:
+
 	return STATUS_SUCCESS;
 }
 
@@ -264,7 +339,7 @@ NTSTATUS listRunningProcesses() {
 
 
 
-NTSTATUS findProcessByModuleName(PUNICODE_STRING name, _Inout_ PINT32 pid) {
+NTSTATUS findProcessByName(PUNICODE_STRING name, _Inout_ PINT32 pid) {
 	ZwQuerySystemInformation pointer;
 	UNICODE_STRING zwquery;
 	RtlInitUnicodeString(&zwquery, L"ZwQuerySystemInformation");
@@ -274,7 +349,9 @@ NTSTATUS findProcessByModuleName(PUNICODE_STRING name, _Inout_ PINT32 pid) {
 	if (!zwQueryAddr)
 
 	{
+#ifdef DEBUG
 		DbgPrint("[Skynet] : findProcessByModuleName : failed to find ZwQuerySystemInformation");
+#endif // DEBUG
 		return STATUS_INTERNAL_ERROR;
 
 	}
@@ -290,21 +367,26 @@ NTSTATUS findProcessByModuleName(PUNICODE_STRING name, _Inout_ PINT32 pid) {
 	}
 	NTSTATUS outcome = (*pointer) (SYSTEM_PROCESS_INFORMATION, buffer, BUFFER_SIZE, &outLength);
 	if (!NT_SUCCESS(outcome)) {
+#ifdef DEBUG
 		DbgPrintEx(0, 0, "[SKYNET] : Failed to query ZwQuerySystemInformation status code :[%d] lenght [%ul]\n", outcome, outLength);
 		if (outLength)
 			DbgPrintEx(0, 0, "[SKYNET] Buffer size mismatch of [%lld]\n", outLength - BUFFER_SIZE);
+#endif // DEBUG
 		goto free;
 	}
+#ifdef DEBUG
 	if (outLength)
-		DbgPrintEx(0, 0, "[SKYNET] ZwQuerySystemInformation returned an outlength value of [%llu]\n", outLength);
+		DbgPrintEx(0, 0, "[SKYNET] ZwQuerySystemInformation returned an outlength value of [%ld]\n", outLength);
+#endif // DEBUG
+
 	SYSTEM_PROCESS_INFORMATION_STRUCT* currentProcessInfo = (SYSTEM_PROCESS_INFORMATION_STRUCT*)buffer;
 	while (1) {
-		DbgPrintEx(0, 0, "[SKYNET] : currentProcess [%wZ]\n", currentProcessInfo->ImageName);
+		//DbgPrintEx(0, 0, "[SKYNET] : currentProcess [%wZ]\n", currentProcessInfo->ImageName);
 		//if (RtlCompareUnicodeString(&currentProcessInfo->ImageName, name, TRUE) == 0)
 		//	__debugbreak();
 		if (isSubstring(&currentProcessInfo->ImageName, name)) {
 			*pid = currentProcessInfo->UniqueProcessId;
-			DbgPrintEx(0, 0, "[SKYNET] : found the target process, pid [%d]\n", *pid);
+			//	DbgPrintEx(0, 0, "[SKYNET] : found the target process, pid [%d]\n", *pid);
 			goto free;
 		}
 		if (!currentProcessInfo->NextEntryOffset) break;
@@ -342,10 +424,15 @@ void discover_paging_mode() {
 	UINT64 cr4 = __readcr4();
 	UINT64 IA32 = __readmsr(IA32_EFER_ID);
 
+#ifdef DEBUG
+
 	DbgPrintEx(0, 0, "[SKYNET]: read values from register [cr0]-[0x%llx]", cr0);
 	DbgPrintEx(0, 0, "[SKYNET]: read values from register [cr2]-[0x%llx]", cr2);
 	DbgPrintEx(0, 0, "[SKYNET]: read values from register [cr3]-[0x%llx]", cr3);
 	DbgPrintEx(0, 0, "[SKYNET]: read values from register [cr4]-[0x%llx]", cr4);
+
+
+#endif // DEBUG
 
 
 
@@ -375,7 +462,7 @@ void navigate_cr3() {
 	UINT32 pid = 0;
 	UNICODE_STRING targetProcessName;
 	RtlInitUnicodeString(&targetProcessName, L"Dbgview.exe");
-	NTSTATUS outcome = findProcessByModuleName(&targetProcessName, &pid);
+	NTSTATUS outcome = findProcessByName(&targetProcessName, &pid);
 	if (!NT_SUCCESS(outcome)) {
 		DbgPrintEx(0, 0, "[SKYNET]: failed to find target process [%wZ]", &targetProcessName);
 		return;
@@ -407,13 +494,12 @@ void navigate_cr3() {
 	phys_addr_MM.PhysicalAddress = p_add;
 	SIZE_T out;
 	NTSTATUS memAccessOutcome = MmCopyMemory(buffer, phys_addr_MM, PLM4_BUFF_SIZE, MM_COPY_MEMORY_PHYSICAL, &out);
-	__debugbreak();
 	if (!NT_SUCCESS(memAccessOutcome))
-
 	{
 		DbgPrint("[SKYNET] : Failed to read physical memory address");
 	}
 	else DbgPrint("[SKYNET] : Accessed physical memory successfully");
+	//TODO finish PTE walk
 	detachFromProcess();
 free:
 	ExFreePool(buffer);
@@ -436,10 +522,16 @@ void requestLogger(ULONG controlCode) {
 		RtlInitUnicodeString(&out, L"IOCTL_READ_PROCESS");
 		break;
 	default:
+#ifdef DEBUG
 		DbgPrintEx(0, 0, "[SKYNET]: [ERROR] UNKNOWN IOCTL CODE", out);
+#endif // DEBUG
+
 		return;
 	}
+#ifdef DEBUG
 	DbgPrintEx(0, 0, "[SKYNET]: Handled a [%zW]\n", &out);
+#endif // DEBUG
+
 }
 NTSTATUS DispatchControl(
 	PDEVICE_OBJECT DeviceObject,
@@ -460,17 +552,22 @@ NTSTATUS DispatchControl(
 		DbgPrint("[SkyNet] : receiving kernel base address...\n");
 		KERNEL_BASE = *((ULONGLONG*)irp->AssociatedIrp.SystemBuffer);
 		ULONGLONG mmcopyaddr = MmCopyMemory;
+#ifdef DEBUG
+
 		DbgPrintEx(0, 0, "[Skynet] : Reading KernelBase from userspace [%lp]\n", KERNEL_BASE);
 		DbgPrintEx(0, 0, "[Skynet] : MmCopyVirtualMemory should be at [%lp]\n", KERNEL_BASE + MM_COPY_VIRTUAL_MEMORY_OFFSET);
+
+#endif // DEBUG
 		break;
 	case IOCTL_QUERY_PROCESSES:
 		listRunningProcesses();
 		break;
 	case IOCTL_QUERY_MODULES:
-		getLoadedModules();
 		break;
 	case IOCTL_READ_PROCESS:
+#ifdef DEBUG
 		DbgPrintEx(DPFLTR_IHVDRIVER_ID, DBG_LOG_LEVEL, "Read request outcome [%d]\n", writeVirtualProcessMemory(irp->AssociatedIrp.SystemBuffer));
+#endif // DEBUG
 		break;
 	case IOCTL_CR3_MANIPULATION:
 		discover_paging_mode();
@@ -501,18 +598,21 @@ ULONG64 findPattern(ULONG64 kernelBase, unsigned char* pattern, SHORT patternLen
 	//dumb version starting from the base of the kernel
 	//a pattern cannot start with a ?
 	//iterating past the kernel image -> should it be considered if the pattern is valid?
-	BYTE* ntosKrnlPtr;
+	unsigned char* patternOld = pattern;
+	unsigned char* ntosKrnlPtr;
 	ULONG64 start; USHORT matchRegion;
-	ntosKrnlPtr = (BYTE*)kernelBase;
+	ntosKrnlPtr = (unsigned char*)kernelBase;
+	if (!ntosKrnlPtr) return 0;
 	unsigned char* orig = pattern;
 restart:
 	if (ntosKrnlPtr - kernelBase >= KERNEL_IMAGE_SIZE) return 0;
 	pattern = orig;
+	while ((*ntosKrnlPtr != *pattern))
+		ntosKrnlPtr++;
 	__debugbreak();
-	while ((*pattern++ != *ntosKrnlPtr++));
-	start = ntosKrnlPtr - 1;
+	start = ntosKrnlPtr;
 	matchRegion = 0;
-	while ((*pattern == '?') || (*pattern == *ntosKrnlPtr))
+	while (((*pattern == '?') || (*pattern == *ntosKrnlPtr)) && matchRegion < patternLength)
 	{
 		pattern++;
 		ntosKrnlPtr++;
