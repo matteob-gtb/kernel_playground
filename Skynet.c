@@ -7,7 +7,7 @@
 
 
 
-#define DEBUG
+//#define DEBUG 
 
 #define SYSTEM_PROCESS_INFORMATION 0x05
 #define SYSTEM_MODULE_INFORMATION 0x0B
@@ -253,10 +253,9 @@ DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
 #endif // DEBUG
 		goto skip;
 	}
- 
-	ULONG64 patternAddress = findPattern(krnlAddress, MmCopyVirtualMemoryPattern, sizeof(MmCopyVirtualMemoryPattern));
 
-	DbgPrintEx(0, 0, "[SKYNET] : findPattern returned [%llu]\n", patternAddress);
+	ULONG64 patternAddress = findPattern(krnlAddress, MmCopyVirtualMemoryPattern, sizeof(MmCopyVirtualMemoryPattern));
+	DbgPrintEx(0, 0, "[SKYNET] : findPattern returned [0x%llx]\n", patternAddress);
 
 skip:
 
@@ -454,13 +453,12 @@ void discover_paging_mode() {
 	}
 
 }
-
-//TODO make this dynamic by walking the process list
+ 
 #define PCIDE_BIT (1<<17)
 void navigate_cr3() {
 	UINT32 pid = 0;
 	UNICODE_STRING targetProcessName;
-	RtlInitUnicodeString(&targetProcessName, L"Dbgview.exe");
+	RtlInitUnicodeString(&targetProcessName, L"victim_3R4T.exe");
 	NTSTATUS outcome = findProcessByName(&targetProcessName, &pid);
 	if (!NT_SUCCESS(outcome)) {
 		DbgPrintEx(0, 0, "[SKYNET]: failed to find target process [%wZ]", &targetProcessName);
@@ -475,7 +473,7 @@ void navigate_cr3() {
 	else DbgPrint("[SKYNET] : PCIDs disabled");
 	//discover CR4.PCIDE
 	//bits 52-11 determine the physical address of the table
-	UINT64 physical_table_address = cr3 & (0xFFFFFFFFFFFF0000);
+	UINT64 physical_table_address = cr3 & (0xFFFFFFFFFFFF00);
 	DbgPrintEx(0, 0, "[SKYNET] : value of cr3 [0x%llx]", cr3);
 	DbgPrintEx(0, 0, "[SKYNET] : Physical address of the PLM4 table [0x%llx]", physical_table_address);
 #define PLM4_BUFF_SIZE 0x1000
@@ -496,12 +494,25 @@ void navigate_cr3() {
 	if (!NT_SUCCESS(memAccessOutcome))
 	{
 		DbgPrint("[SKYNET] : Failed to read physical memory address");
+		goto free;
 	}
 	else DbgPrint("[SKYNET] : Accessed physical memory successfully");
-	//TODO finish PTE walk
+	unsigned short i = 0;
+	ULONG64* plm4e_buffer = (ULONG64*)buffer;
+	ULONG64 val = 0;
+	for (; i < out / sizeof(ULONG64); i++)
+	{
+		val = *plm4e_buffer++;
+		if (val)
+			DbgPrintEx(0, 0, "[SKYNET] : PLM4 entry [%d] : [0x%llx]\n", i, val);
+	}
+	DbgPrintEx(0, 0, "[SKYNET] : PLM4 raw address : [%lli]\n", cr3);
+
+
+
 	detachFromProcess();
 free:
-	ExFreePool(buffer);
+	ExFreePoolWithTag(buffer, DRIVER_MEM_TAG);
 }
 
 
@@ -571,7 +582,7 @@ NTSTATUS DispatchControl(
 	case IOCTL_CR3_MANIPULATION:
 		discover_paging_mode();
 		break;
-	}
+}
 end:
 	irp->IoStatus.Status = STATUS_SUCCESS;
 	irp->IoStatus.Information = irpStack.Parameters.DeviceIoControl.OutputBufferLength;
@@ -591,42 +602,6 @@ NTSTATUS DispatchCreateClose(
 	return STATUS_SUCCESS;
 }
 
-
-#define KERNEL_IMAGE_SIZE 10'854'240
-ULONG64 findPattern(ULONG64 kernelBase, unsigned char* pattern, SHORT patternLength) {
-	//dumb version starting from the base of the kernel
-	//a pattern cannot start with a ?
-	//iterating past the kernel image -> should it be considered if the pattern is valid?
-	unsigned char* patternOld = pattern;
-	unsigned char* ntosKrnlPtr;
-	ULONG64 start; USHORT matchRegion;
-	ULONG64 upperLimit = kernelBase + KERNEL_IMAGE_SIZE;
-	ntosKrnlPtr = (unsigned char*)kernelBase;
-	if (!ntosKrnlPtr) return 0;
-	unsigned char* orig = pattern;
-
-	while (ntosKrnlPtr < upperLimit)
-	{
-		pattern = orig;
-		while ((*ntosKrnlPtr != *pattern)) //iterate until you find the first byte of the pattern
-			ntosKrnlPtr++;
-		start = ntosKrnlPtr; //start address of the pattern
-		matchRegion = 0;
-		//iterate until you find matching bytes
-		while (((*pattern == '?') || (*pattern == *ntosKrnlPtr)) && matchRegion < patternLength)
-		{
-			pattern++;
-			ntosKrnlPtr++;
-			matchRegion++;
-		}
-		if (matchRegion >= patternLength >> 1)
-			__debugbreak();
-		if (matchRegion == patternLength) return start;
-	}
-	return 0;
-
-
-}
 
 
 
