@@ -262,6 +262,81 @@ skip:
 	return STATUS_SUCCESS;
 }
 
+NTSTATUS loadExecutableInKernelMemory(_In_ PUNICODE_STRING fileName, _Inout_ void * executableStart) {
+	OBJECT_ATTRIBUTES  objAttr;
+	HANDLE fileHandle;
+	IO_STATUS_BLOCK    ioStatusBlock;
+
+	InitializeObjectAttributes(&objAttr, fileName,
+		OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE,
+		NULL, NULL);
+	if (KeGetCurrentIrql() != PASSIVE_LEVEL)
+		return STATUS_INVALID_DEVICE_STATE;
+
+	NTSTATUS getHandleOutcome = ZwCreateFile(&fileHandle,
+		GENERIC_READ,
+		&objAttr, &ioStatusBlock, NULL,
+		FILE_ATTRIBUTE_NORMAL,
+		0,
+		FILE_READ_ACCESS,
+		FILE_SYNCHRONOUS_IO_NONALERT,
+		NULL, 0);
+	if (!NT_SUCCESS(getHandleOutcome)) {
+#ifdef DEBUG
+		DbgPrint("[SKYNET] : failed to open a handle to the file\n");
+#endif
+		return STATUS_UNSUCCESSFUL;
+	}
+	FILE_FULL_DIR_INFORMATION information;
+	NTSTATUS informationOutcome = ZwQueryDirectoryFile(
+		fileHandle,
+		NULL, NULL, NULL,
+		&ioStatusBlock,
+		&information,
+		sizeof(FILE_FULL_DIR_INFORMATION),
+		FileFullDirectoryInformation,
+		TRUE,
+		fileName,
+		TRUE
+	);
+	if (!NT_SUCCESS(informationOutcome)) {
+#ifdef DEBUG
+		DbgPrint("[SKYNET] : failed to query file information\n");
+#endif // DEBUG
+		return STATUS_UNSUCCESSFUL;
+	}
+	SIZE_T size = information.AllocationSize.QuadPart;
+	LARGE_INTEGER readHead;
+	void* fileBuffer = ExAllocatePool2(POOL_FLAG_NON_PAGED, size, DRIVER_MEM_TAG);
+	if (!fileBuffer) {
+#ifdef DEBUG
+		DbgPrint("[SKYNET] : Failed to allocate memory\n");
+#endif // DEBUG
+		return STATUS_INSUFFICIENT_RESOURCES;
+
+	}
+	NTSTATUS fileReadOutcome = ZwReadFile(
+		fileHandle,
+		NULL,
+		NULL,
+		NULL,
+		&ioStatusBlock,
+		fileBuffer,
+		size,
+		&readHead,
+		NULL
+	);
+	if (!NT_SUCCESS(fileReadOutcome)) {
+#ifdef DEBUG
+		DbgPrint("[SKYNET] : failed to read the file\n");
+#endif // DEBUG
+		return STATUS_UNSUCCESSFUL;
+	}
+	else *((ULONG64*)executableStart) = fileBuffer;
+
+}
+
+
 
 NTSTATUS listRunningProcesses() {
 	ZwQuerySystemInformation pointer;
@@ -453,7 +528,7 @@ void discover_paging_mode() {
 	}
 
 }
- 
+
 #define PCIDE_BIT (1<<17)
 void navigate_cr3() {
 	UINT32 pid = 0;
@@ -582,7 +657,7 @@ NTSTATUS DispatchControl(
 	case IOCTL_CR3_MANIPULATION:
 		discover_paging_mode();
 		break;
-}
+	}
 end:
 	irp->IoStatus.Status = STATUS_SUCCESS;
 	irp->IoStatus.Information = irpStack.Parameters.DeviceIoControl.OutputBufferLength;

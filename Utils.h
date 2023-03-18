@@ -29,8 +29,7 @@ BOOLEAN isSubstring(_In_ PUNICODE_STRING original, _In_ PUNICODE_STRING substrin
 BOOLEAN isSubstringChar(_In_ PUCHAR original, _In_ PUCHAR substring);
 ULONG64 findPattern(_In_ ULONG64 kernelBase,_In_ unsigned char* pattern, _In_ SHORT patternLength);
 
-#define DEBUG_UTILS 0
-
+ 
 BOOLEAN isSubstringChar(_In_ PUCHAR original, _In_ PUCHAR substring) {
 	PUCHAR copySub = substring;
 	BOOLEAN equal = FALSE;
