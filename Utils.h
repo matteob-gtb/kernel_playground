@@ -1,23 +1,8 @@
 #pragma once
-#include  <ntifs.h>
-
-#define PLM4_ENTRY_INDEX_MASK 0xff8000000000 //bits [39,47]
-#define DIRECTORY_POINTER_MASK 0x7fc0000000 //bits [30,38]
-#define DIRECTORY_MASK 0x3fe00000 //bits [21,29]
-#define TABLE_MASK 0xff000// bits [12,20]
-#define OFFSET_MASK  0xfff//bits [0,11]
-
-#define SANITY_CHECK_VIRTUAL_ADDRESS_MASKS PLM4_ENTRY_INDEX_MASK&DIRECTORY_POINTER_MASK&DIRECTORY_MASK&TABLE_MASK&OFFSET_MASK
+#include "defs.h"
 
 static ULONG64 keys[10];
-void initKeys() {
-	srand(time(NULL) ^ 1337 + GetProcessId(NULL) * 17);
-	for (USHORT i = 0; i < 10; i++)
-	{
-		keys[i] = ((ULONG64)rand() << 32) | ((ULONG64)rand() << 16) | rand();
-		printf("XOR Key [%d] is [%llx]\n", i, keys[i]);
-	}
-}
+void initKeys();
 
 #define SPOOF	*(unsigned long long*)_AddressOfReturnAddress() = *(ULONG64*)_AddressOfReturnAddress() ^ keys[(ULONG64)_AddressOfReturnAddress() % 10];
 #define UNSPOOF SPOOF
@@ -25,11 +10,6 @@ void initKeys() {
 
 
 
-BOOLEAN isSubstring(_In_ PUNICODE_STRING original, _In_ PUNICODE_STRING substring);
-BOOLEAN isSubstringChar(_In_ PUCHAR original, _In_ PUCHAR substring);
-ULONG64 findPattern(_In_ ULONG64 kernelBase,_In_ unsigned char* pattern, _In_ SHORT patternLength);
-
- 
 BOOLEAN isSubstringChar(_In_ PUCHAR original, _In_ PUCHAR substring) {
 	PUCHAR copySub = substring;
 	BOOLEAN equal = FALSE;
@@ -63,21 +43,66 @@ VOID getBinaryRepresentation(_In_ ULONG64 value, _Inout_ unsigned char* string) 
 	string[1] = '\x00';
 	for (; i < 8; i++) {
 		string -= 8;
-#ifdef DEBUG_UTILS
-		DbgPrintEx(0, 0, "[SKYNET] : current byte [%hhx]\n", byteEquivalent[i]);
-#endif // DEBUG_UTILS
 		for (short j = 7; j >= 0; j--) {
 			//work on the i-th byte of the value
 			string[j] = (byteEquivalent[i] & (1 << (7 - j))) ? '1' : '0'; //either 1 or 0 
-#ifdef DEBUG_UTILS
-			DbgPrintEx(0, 0, "[SKYNET] : resulting bit #%d [%1c]\n", (7 - j), string[j]);
-#endif // DEBUG_UTILS
-
-
-
 		}
 	}
 
+}
+
+NTSTATUS parsePEHeader(_In_ ULONG64 executableStartAddress) {
+
+	BYTE* ptr = (BYTE*)executableStartAddress;
+	unsigned int offset = *((unsigned int*)(ptr + 0x3c));
+	ptr += offset; // should point to PE\0\0
+	PPE_HEADER peHeader = (PPE_HEADER)ptr;
+	if (peHeader->mMagic != 0x00004550 || peHeader->mSizeOfOptionalHeader == 0)
+	{
+#ifdef DEBUG
+		DbgPrint("Wrong PE header signature\n");
+#endif // DEBUG
+		return STATUS_UNSUCCESSFUL;
+	}
+	PIMAGE_OPTIONAL_HEADER optionalHeader = (PIMAGE_OPTIONAL_HEADER)(peHeader + 1);
+	if (optionalHeader->Magic != 0x20b) { //PE32+
+#ifdef DEBUG
+		DbgPrint("Wrong PE optional header signature\n");
+#endif // DEBUG
+		return STATUS_UNSUCCESSFUL;
+	}
+	//BYTE* dot_text = (BYTE*)(executableStartAddress + optionalHeader->BaseOfCode);
+	short nDataEntries = optionalHeader->NumberOfRvaAndSizes;
+	short nSections = peHeader->mNumberOfSections;
+	PIMAGE_SECTION_HEADER sectionsStart = (PIMAGE_SECTION_HEADER)(&optionalHeader->imageDataDirectory[nDataEntries]);
+	for (auto i = 0; i < nSections; i++)
+	{
+		DbgPrintEx(0, 0, "[SKYNET] - Section [%s], virtual address [%#lx]\n", sectionsStart->Name, sectionsStart->VirtualAddress);
+		sectionsStart++;
+	}
+	for (auto j = 0; j < nDataEntries; j++) {
+		DbgPrintEx(0, 0, "[SKYNET] - Data directory #%d - offset [%#lx], size [%d]\n", j, optionalHeader->imageDataDirectory[j].VirtualAddressOffset, optionalHeader->imageDataDirectory[j].Size);
+	}
+
+	//rebase sections
+	PIMAGE_SECTION_HEADER currentSection = sectionsStart-nSections;
+	ULONG64 oldStart = 0, newStart = 0;
+	UINT32 sectionSize = 0;
+	for (auto i = 0; i < nSections; i++)
+	{
+		sectionSize = currentSection->SizeOfRawData;
+		newStart = executableStartAddress + currentSection->VirtualAddress;
+		oldStart = executableStartAddress + currentSection->PointerToRawData;
+		DbgPrintEx(0, 0, "[SKYNET] - Section [%s], virtual address [%#lx], size [%d]\n", currentSection->Name, currentSection->VirtualAddress, sectionSize);
+		memcpy(newStart, oldStart, sectionSize);
+		RtlZeroMemory(oldStart, sectionSize);
+		DbgPrintEx(0, 0, "[SKYNET] : Section [%s] [Old start] [%#llx] - [New start] [%#llx]", currentSection->Name, oldStart, newStart);
+		currentSection++;
+	}
+	PIMAGE_IMPORT_DIRECTORY_ENTRY importDirectoryTable = (PIMAGE_IMPORT_DIRECTORY_ENTRY)(executableStartAddress + optionalHeader->imageDataDirectory[IMPORT_TABLE_INDEX].VirtualAddressOffset);
+ 
+
+	return STATUS_SUCCESS;
 }
 
 

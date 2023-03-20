@@ -4,58 +4,29 @@
 #include "offsets.h"
 #include "Common.h"
 #include "Utils.h"
+#include "patterns.h"
+//#include "defs.h"
 
 
+#define DEBUG 
 
-//#define DEBUG 
 
-#define SYSTEM_PROCESS_INFORMATION 0x05
-#define SYSTEM_MODULE_INFORMATION 0x0B
-
-#define DBG_LOG_LEVEL 31
-
-static void* functions[1];
 
 static BOOLEAN isAttached;
 static PEPROCESS attachedProcess;
 
-typedef NTSTATUS(*ZwQuerySystemInformation)(unsigned short,
-	PVOID,
-	ULONG,
-	PULONG);
 
-typedef NTSTATUS(*MmCopyVirtualMemory)
-(
-	PEPROCESS SourceProcess,
-	PVOID SourceAddress,
-	PEPROCESS TargetProcess,
-	PVOID TargetAddress,
-	SIZE_T BufferSize,
-	KPROCESSOR_MODE PreviousMode,
-	PSIZE_T ReturnSize
-	);
 
-VOID threadFunction(PVOID context);
 
-NTSTATUS
-DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath);
 
-VOID
-DriverUnload(PDRIVER_OBJECT DriverObject);
 
 #pragma alloc_text(INIT, DriverEntry)
 #pragma alloc_text(PAGE, DriverUnload)
 
-ULONG64 findPattern(ULONG64 kernelBase, unsigned char* pattern, SHORT patternLength);
 
 static ULONGLONG KERNEL_BASE = 0;
 
-void discover_paging_mode();
-void navigate_cr3();
 
-
-DRIVER_DISPATCH DispatchControl;
-DRIVER_DISPATCH DispatchCreateClose;
 
 
 
@@ -73,9 +44,6 @@ NTSTATUS findModuleByName(_In_ PUCHAR targetName, _Inout_ PULONG64 address) {
 #ifdef DEBUG
 	DbgPrintEx(0, 0, "[SKYNET]: target name %s\n", targetName);
 #endif // DEBUG
-
-
-
 	UNICODE_STRING zwquery;
 	RtlInitUnicodeString(&zwquery, L"ZwQuerySystemInformation");
 	ZwQuerySystemInformation pointer;
@@ -84,7 +52,7 @@ NTSTATUS findModuleByName(_In_ PUCHAR targetName, _Inout_ PULONG64 address) {
 	if (zwQueryAddr)
 	{
 #ifdef DEBUG
-		DbgPrintEx(DPFLTR_IHVDRIVER_ID, DBG_LOG_LEVEL, "[SKYNET]: Found ZwQuerySystemInformation at [0x%lp]\n", zwQueryAddr);
+		DbgPrintEx(DPFLTR_IHVDRIVER_ID, 0, "[SKYNET]: Found ZwQuerySystemInformation at [0x%lp]\n", zwQueryAddr);
 #endif // DEBUG
 		pointer = (ZwQuerySystemInformation)zwQueryAddr;
 		PVOID buffer = ExAllocatePool2(POOL_FLAG_NON_PAGED, MODULE_BUFFER_SIZE, DRIVER_MEM_TAG);
@@ -230,39 +198,47 @@ DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
 		IoCreateSymbolicLink(&DosDeviceName, &DriverName);
 	}
 	else return STATUS_FAILED_DRIVER_ENTRY;
-	discover_paging_mode();
-	navigate_cr3();
-	unsigned char MmCopyVirtualMemoryPattern[] =
-	{
-	  0x40, 0x53, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56,
-	  0x41, 0x57, 0x48, 0x81, 0xEC, 0x10, 0x04, 0x00, 0x00, 0x48,
-	  0x8B, 0x05, 0x46, 0xA7, 0x58, 0x00, 0x48, 0x33, 0xC4, 0x48,
-	  0x89, 0x84, 0x24, 0x00, 0x04, 0x00, 0x00, 0x49, 0x8B, 0xF9,
-	  0x4C, 0x89, 0x4C, 0x24, 0x60, 0x4C, 0x89, 0x84, 0x24, 0x88
-	};
-	ULONG64 krnlAddress = 0;
-	unsigned char kernelName[] = "ntoskrnl.exe\0";
+	//	discover_paging_mode();
+	//	navigate_cr3();
+	// 
+	//	ULONG64 krnlAddress = 0;
+	//	unsigned char kernelName[] = "ntoskrnl.exe\0";
+	//#ifdef DEBUG
+	//	DbgPrintEx(0, 0, "[SKYNET] : Target name is [%s]\n", kernelName);
+	//#endif // DEBUG
+	//
+	//	NTSTATUS kernelBaseFound = findModuleByName(kernelName, &krnlAddress);
+	//	if (!NT_SUCCESS(kernelBaseFound)) {
+	//#ifdef DEBUG
+	//		DbgPrint("[SKYNET] : Failed to find kernel module");
+	//#endif // DEBUG
+	//		goto skip;
+	//	}
+	//
+	//	ULONG64 patternAddress = findPattern(krnlAddress, MmCopyVirtualMemoryPattern, sizeof(MmCopyVirtualMemoryPattern));
+	//	DbgPrintEx(0, 0, "[SKYNET] : findPattern returned [0x%llx]\n", patternAddress);
+	UNICODE_STRING fileName;
+	RtlInitUnicodeString(&fileName, MAPPED_DRIVER_PATH);
+	ULONG64 executableStartAddress = 0;
+	ULONG64 fileSize;
+	NTSTATUS loadOutcome = loadExecutableInKernelMemory(&fileName, &executableStartAddress,&fileSize);
+	if (!NT_SUCCESS(loadOutcome)) {
 #ifdef DEBUG
-	DbgPrintEx(0, 0, "[SKYNET] : Target name is [%s]\n", kernelName);
+		DbgPrint("[SKYNET] : Failed to load manually mapped driver\n");
+		goto free;
 #endif // DEBUG
 
-	NTSTATUS kernelBaseFound = findModuleByName(kernelName, &krnlAddress);
-	if (!NT_SUCCESS(kernelBaseFound)) {
-#ifdef DEBUG
-		DbgPrint("[SKYNET] : Failed to find kernel module");
-#endif // DEBUG
-		goto skip;
 	}
+	parsePEHeader(executableStartAddress);
 
-	ULONG64 patternAddress = findPattern(krnlAddress, MmCopyVirtualMemoryPattern, sizeof(MmCopyVirtualMemoryPattern));
-	DbgPrintEx(0, 0, "[SKYNET] : findPattern returned [0x%llx]\n", patternAddress);
-
+free:
+	if (executableStartAddress) ExFreePool(executableStartAddress);
 skip:
 
 	return STATUS_SUCCESS;
 }
 
-NTSTATUS loadExecutableInKernelMemory(_In_ PUNICODE_STRING fileName, _Inout_ void * executableStart) {
+NTSTATUS loadExecutableInKernelMemory(_In_ PUNICODE_STRING fileName, _Inout_ ULONG64* executableStart, _Inout_ ULONG64* fileSize) {
 	OBJECT_ATTRIBUTES  objAttr;
 	HANDLE fileHandle;
 	IO_STATUS_BLOCK    ioStatusBlock;
@@ -272,69 +248,88 @@ NTSTATUS loadExecutableInKernelMemory(_In_ PUNICODE_STRING fileName, _Inout_ voi
 		NULL, NULL);
 	if (KeGetCurrentIrql() != PASSIVE_LEVEL)
 		return STATUS_INVALID_DEVICE_STATE;
-
-	NTSTATUS getHandleOutcome = ZwCreateFile(&fileHandle,
+	NTSTATUS getHandleOutcome = ZwOpenFile(&fileHandle,
 		GENERIC_READ,
-		&objAttr, &ioStatusBlock, NULL,
-		FILE_ATTRIBUTE_NORMAL,
-		0,
-		FILE_READ_ACCESS,
-		FILE_SYNCHRONOUS_IO_NONALERT,
-		NULL, 0);
+		&objAttr,
+		&ioStatusBlock,
+		NULL,
+		FILE_SYNCHRONOUS_IO_NONALERT);
+
 	if (!NT_SUCCESS(getHandleOutcome)) {
 #ifdef DEBUG
 		DbgPrint("[SKYNET] : failed to open a handle to the file\n");
 #endif
 		return STATUS_UNSUCCESSFUL;
 	}
-	FILE_FULL_DIR_INFORMATION information;
-	NTSTATUS informationOutcome = ZwQueryDirectoryFile(
-		fileHandle,
-		NULL, NULL, NULL,
-		&ioStatusBlock,
-		&information,
-		sizeof(FILE_FULL_DIR_INFORMATION),
-		FileFullDirectoryInformation,
-		TRUE,
-		fileName,
-		TRUE
-	);
-	if (!NT_SUCCESS(informationOutcome)) {
-#ifdef DEBUG
-		DbgPrint("[SKYNET] : failed to query file information\n");
-#endif // DEBUG
-		return STATUS_UNSUCCESSFUL;
-	}
-	SIZE_T size = information.AllocationSize.QuadPart;
-	LARGE_INTEGER readHead;
-	void* fileBuffer = ExAllocatePool2(POOL_FLAG_NON_PAGED, size, DRIVER_MEM_TAG);
-	if (!fileBuffer) {
+	unsigned char* fileInformationBuffer[sizeof(FILE_DIRECTORY_INFORMATION) + 1024];
+	FILE_DIRECTORY_INFORMATION array[4];
+	IO_STATUS_BLOCK    secIoStatusBlock;
+	//	NTSTATUS informationOutcome = ZwQueryDirectoryFile(
+	//		fileHandle,
+	//		NULL, NULL, NULL,
+	//		&ioStatusBlock,
+	//		array,
+	//		sizeof(array),
+	//		FileDirectoryInformation,TRUE, fileName, TRUE
+	//	);
+	//	__debugbreak();
+	//	if (!NT_SUCCESS(informationOutcome)) {
+	//#ifdef DEBUG
+	//		DbgPrint("[SKYNET] : failed to query file information\n");
+	//#endif // DEBUG
+	//		ZwClose(fileHandle);
+	//		return STATUS_UNSUCCESSFUL;
+	//	}
+	//	FILE_DIRECTORY_INFORMATION* infoPtr = (FILE_DIRECTORY_INFORMATION*)fileInformationBuffer;
+	//	SIZE_T size = infoPtr->AllocationSize.QuadPart;
+	//	LARGE_INTEGER readHead;
+		/*
+		research alternatives here -> mmallocateindipendentpages -> look up side effects
+		*/
+	SIZE_T fileBufferSize = 1024 * 1024;
+	void* fileContentBuffer = ExAllocatePool2(POOL_FLAG_NON_PAGED, fileBufferSize, DRIVER_MEM_TAG);
+	if (!fileContentBuffer) {
 #ifdef DEBUG
 		DbgPrint("[SKYNET] : Failed to allocate memory\n");
 #endif // DEBUG
+		ZwClose(fileHandle);
 		return STATUS_INSUFFICIENT_RESOURCES;
 
 	}
+	LARGE_INTEGER readHead;
+	readHead.QuadPart = 0;
 	NTSTATUS fileReadOutcome = ZwReadFile(
 		fileHandle,
 		NULL,
 		NULL,
 		NULL,
 		&ioStatusBlock,
-		fileBuffer,
-		size,
+		fileContentBuffer,
+		fileBufferSize,
 		&readHead,
 		NULL
 	);
 	if (!NT_SUCCESS(fileReadOutcome)) {
 #ifdef DEBUG
 		DbgPrint("[SKYNET] : failed to read the file\n");
+		DbgPrint("[SKYNET] : failed to read the file\n");
 #endif // DEBUG
+		ZwClose(fileHandle);
 		return STATUS_UNSUCCESSFUL;
 	}
-	else *((ULONG64*)executableStart) = fileBuffer;
+	else {
+		*executableStart = fileContentBuffer;
+		*fileSize = ioStatusBlock.Information;
+	}
+#ifdef DEBUG
+	DbgPrintEx(0, 0, "[SKYNET] : Read [%lld] bytes from disk\n", ioStatusBlock.Information);
+#endif // DEBUG
+
+cleanup:
+	ZwClose(fileHandle);
 
 }
+
 
 
 
@@ -343,10 +338,10 @@ NTSTATUS listRunningProcesses() {
 	UNICODE_STRING zwquery;
 	RtlInitUnicodeString(&zwquery, L"ZwQuerySystemInformation");
 	PVOID zwQueryAddr = MmGetSystemRoutineAddress(&zwquery);
-	DbgPrintEx(DPFLTR_IHVDRIVER_ID, DBG_LOG_LEVEL, "Result of getsysroutine on ZwQuerySystemInformation [%lp]\n", zwQueryAddr);
+	DbgPrintEx(DPFLTR_IHVDRIVER_ID, 0, "Result of getsysroutine on ZwQuerySystemInformation [%lp]\n", zwQueryAddr);
 	if (zwQueryAddr)
 	{
-		DbgPrintEx(DPFLTR_IHVDRIVER_ID, DBG_LOG_LEVEL, "Found ZwQuerySystemInformation at [0x%lp]\n", zwQueryAddr);
+		DbgPrintEx(DPFLTR_IHVDRIVER_ID, 0, "Found ZwQuerySystemInformation at [0x%lp]\n", zwQueryAddr);
 		pointer = (ZwQuerySystemInformation)zwQueryAddr;
 		PVOID buffer = ExAllocatePool2(POOL_FLAG_NON_PAGED, PROCESS_INFO_BUFFER_SIZE, DRIVER_MEM_TAG);
 		if (!buffer) {
@@ -361,7 +356,7 @@ NTSTATUS listRunningProcesses() {
 			outcome = (*pointer) (SYSTEM_PROCESS_INFORMATION, buffer, PROCESS_INFO_BUFFER_SIZE, &length);
 			if (!NT_SUCCESS(outcome) && length > 0) {
 				while (!NT_SUCCESS(outcome) && tryN < MAX_ALLOC_RETRY) {
-					DbgPrintEx(DPFLTR_IHVDRIVER_ID, DBG_LOG_LEVEL, "[ERROR] more memory was needed to store the result,trying again [%d]\n", tryN);
+					DbgPrintEx(DPFLTR_IHVDRIVER_ID, 0, "[ERROR] more memory was needed to store the result,trying again [%d]\n", tryN);
 					ULONG newLength = length + 1024;
 					ExFreePoolWithTag(buffer, DRIVER_MEM_TAG);
 					buffer = ExAllocatePool2(POOL_FLAG_NON_PAGED, newLength, DRIVER_MEM_TAG);
@@ -627,7 +622,7 @@ NTSTATUS DispatchControl(
 	UNREFERENCED_PARAMETER(DeviceObject);
 	DbgPrint("Dispatched an IRP_MJ_DEVICE_CONTROL");
 	unsigned long REQ_FROM_USER = irpStack.Parameters.DeviceIoControl.IoControlCode;
-	DbgPrintEx(DPFLTR_IHVDRIVER_ID, DBG_LOG_LEVEL, "IOCTL code [%d]\n", REQ_FROM_USER);
+	DbgPrintEx(DPFLTR_IHVDRIVER_ID, 0, "IOCTL code [%d]\n", REQ_FROM_USER);
 	requestLogger(REQ_FROM_USER);
 	ULONG targetProcessID = -1;
 	READ_FROM_PROCESS_REQUEST r_request;
@@ -651,7 +646,7 @@ NTSTATUS DispatchControl(
 		break;
 	case IOCTL_READ_PROCESS:
 #ifdef DEBUG
-		DbgPrintEx(DPFLTR_IHVDRIVER_ID, DBG_LOG_LEVEL, "Read request outcome [%d]\n", writeVirtualProcessMemory(irp->AssociatedIrp.SystemBuffer));
+		DbgPrintEx(DPFLTR_IHVDRIVER_ID, 0, "Read request outcome [%d]\n", writeVirtualProcessMemory(irp->AssociatedIrp.SystemBuffer));
 #endif // DEBUG
 		break;
 	case IOCTL_CR3_MANIPULATION:
