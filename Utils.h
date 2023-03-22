@@ -127,18 +127,19 @@ NTSTATUS parsePEHeader(_In_ ULONG64 executableStartAddress) {
 		lookupBreakdown = (PIMPORT_TABLE_BREAKDOWN)importLookupTable;
 		j = 0;
 		ULONG64 currentRow = importLookupTable->entry[j];
-		DbgPrintEx(0, 0, "current %#llx", currentRow);
+		DbgPrintEx(0, 0, "[SKYNET] : [current entry : %#llx]\n", currentRow);
 		while (currentRow != NULL) {
-			if (currentRow & (ORDINAL_MASK_PE64)) DbgPrintEx(0, 0, "[SKYNET] [current import IS ordinal] [#%d]\n", lookupBreakdown->ordinalNumber);
+			if (currentRow & IMPORT_ORDINAL_MASK_PE64) DbgPrintEx(0, 0, "[SKYNET] [current import IS ordinal] [#%d]\n", lookupBreakdown->lowest32bits.ordinalStruct.ordinalNumber);
 			else
 			{
-				currentHint = ((char*)lookupBreakdown->hintNameRVA) + 2;
+				currentHint = ((char*)imageBase + lookupBreakdown->lowest32bits.nameRVA) + 2;
 				DbgPrintEx(0, 0, "[SKYNET] [module][%s] [current hint][%s]\n", dependencyModuleName, currentHint);
 			}
 			currentRow = importLookupTable->entry[++j];
+			lookupBreakdown = &currentRow;
+			__debugbreak();
 		}
 		importDirectoryTable++;
-		__debugbreak();
 	}
 	return STATUS_SUCCESS;
 }

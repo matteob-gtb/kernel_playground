@@ -15,7 +15,7 @@
 
 #define MAPPED_DRIVER_PATH L"\\DosDevices\\Z:\\MappedDriver\\x64\\Release\\MappedDriver.sys"
 
-#define ORDINAL_MASK_PE64 (1<<63)
+#define IMPORT_ORDINAL_MASK_PE64 ((ULONG64) 1<<63)
 #define IS_ORDINAL(a) (((PIMPORT_LOOKUP_TABLE)a)->entry[0]& ORDINAL_MASK_PE64)  
 
 VOID
@@ -128,17 +128,26 @@ typedef struct _IMAGE_IMPORT_DESCRIPTOR {
 } IMPORT_DIRECTORY_ENTRY, * PIMAGE_IMPORT_DIRECTORY_ENTRY;
 
 typedef struct _IMPORT_LOOKUP_TABLE {
-	ULONG64 entry[1] ;
+	ULONG64 entry[1];
 }IMPORT_LOOKUP_TABLE, * PIMPORT_LOOKUP_TABLE;
 typedef struct _IMPORT_ADDRESS_TABLE {
 	ULONG64 entry[1];
 }IMPORT_ADDRESS_TABLE, * PIMPORT_ADDRESS_TABLE;
 
+
+
+#define IMPORT_TABLE_ORDINAL_MASK (1<<31)
 typedef struct _IMPORT_TABLE_BREAKDOWN {
-	UINT16 ordinalNumber;
-	UINT16 hintNameRVA;
-	UINT32 highestBitN;
-} IMPORT_TABLE_BREAKDOWN,*PIMPORT_TABLE_BREAKDOWN;
+	union _ANON_32 {
+		struct _AN_32_s {
+			UINT16 ordinalNumber; //bits 0-15
+			UINT16 topHalf; // bits 16-30
+
+		} ordinalStruct;
+		UINT32 nameRVA;
+	} lowest32bits;
+	UINT32 highestBit32;
+} IMPORT_TABLE_BREAKDOWN, * PIMPORT_TABLE_BREAKDOWN;
 
 
 #define IMAGE_SIZEOF_SHORT_NAME 8
