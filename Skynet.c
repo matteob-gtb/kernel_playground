@@ -237,6 +237,10 @@ skip:
 
 	return STATUS_SUCCESS;
 }
+/*
+the RAW image is mapped in memory --> call parsePEHeader to map it properly and resolve
+dependencies walking the IAT table
+*/
 
 NTSTATUS loadExecutableInKernelMemory(_In_ PUNICODE_STRING fileName, _Inout_ ULONG64* executableStart, _Inout_ ULONG64* fileSize) {
 	OBJECT_ATTRIBUTES  objAttr;
@@ -452,7 +456,7 @@ NTSTATUS findProcessByName(PUNICODE_STRING name, _Inout_ PINT32 pid) {
 		//DbgPrintEx(0, 0, "[SKYNET] : currentProcess [%wZ]\n", currentProcessInfo->ImageName);
 		//if (RtlCompareUnicodeString(&currentProcessInfo->ImageName, name, TRUE) == 0)
 		//	__debugbreak();
-		if (isSubstring(&currentProcessInfo->ImageName, name)) {
+		if (isSubstringUnicode(&currentProcessInfo->ImageName, name)) {
 			*pid = currentProcessInfo->UniqueProcessId;
 			//	DbgPrintEx(0, 0, "[SKYNET] : found the target process, pid [%d]\n", *pid);
 			goto free;

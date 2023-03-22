@@ -15,6 +15,8 @@
 
 #define MAPPED_DRIVER_PATH L"\\DosDevices\\Z:\\MappedDriver\\x64\\Release\\MappedDriver.sys"
 
+#define ORDINAL_MASK_PE64 (1<<63)
+#define IS_ORDINAL(a) (((PIMPORT_LOOKUP_TABLE)a)->entry[0]& ORDINAL_MASK_PE64)  
 
 VOID
 DriverUnload(PDRIVER_OBJECT DriverObject);
@@ -36,7 +38,7 @@ NTSTATUS trashPEHeader(_In_ PVOID executableStartAddress);
 
 ULONG64 findPattern(ULONG64 kernelBase, unsigned char* pattern, SHORT patternLength);
 
-BOOLEAN isSubstring(_In_ PUNICODE_STRING original, _In_ PUNICODE_STRING substring);
+BOOLEAN isSubstringUnicode(_In_ PUNICODE_STRING original, _In_ PUNICODE_STRING substring);
 BOOLEAN isSubstringChar(_In_ PUCHAR original, _In_ PUCHAR substring);
 ULONG64 findPattern(_In_ ULONG64 kernelBase, _In_ unsigned char* pattern, _In_ SHORT patternLength);
 
@@ -117,24 +119,27 @@ typedef struct _IMAGE_OPTIONAL_HEADER64 {
 } IMAGE_OPTIONAL_HEADER, * PIMAGE_OPTIONAL_HEADER;
 
 typedef struct _IMAGE_IMPORT_DESCRIPTOR {
-	union {
-		ULONG Characteristics;
-		ULONG OriginalFirstThunk;
-	} DUMMYUNIONNAME;
+
+	ULONG importLookupTableRVA;
 	ULONG TimeDateStamp;
 	ULONG ForwarderChain;
 	ULONG Name;
-	ULONG FirstThunk;
+	ULONG importAddressRVA;
 } IMPORT_DIRECTORY_ENTRY, * PIMAGE_IMPORT_DIRECTORY_ENTRY;
 
-typedef struct _IAT_TABLE_STRUCT {
-	UINT32 rvaOffset;
-	UINT32 timeStamp;
-	UINT32 forwardChain;
-	UINT32 rvaName;
-	UINT32 thunkRVA;
+typedef struct _IMPORT_LOOKUP_TABLE {
+	ULONG64 entry[1] ;
+}IMPORT_LOOKUP_TABLE, * PIMPORT_LOOKUP_TABLE;
+typedef struct _IMPORT_ADDRESS_TABLE {
+	ULONG64 entry[1];
+}IMPORT_ADDRESS_TABLE, * PIMPORT_ADDRESS_TABLE;
 
-} IAT_TABLE, * PIAT_TABLE;
+typedef struct _IMPORT_TABLE_BREAKDOWN {
+	UINT16 ordinalNumber;
+	UINT16 hintNameRVA;
+	UINT32 highestBitN;
+} IMPORT_TABLE_BREAKDOWN,*PIMPORT_TABLE_BREAKDOWN;
+
 
 #define IMAGE_SIZEOF_SHORT_NAME 8
 typedef struct _IMAGE_SECTION_HEADER {
