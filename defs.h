@@ -168,7 +168,77 @@ typedef struct _IMAGE_SECTION_HEADER {
 } IMAGE_SECTION_HEADER, * PIMAGE_SECTION_HEADER;
 
 
-#define EXPORT_TABLE_INDEX 0
+typedef struct _IMAGE_DOS_HEADER {      // DOS .EXE header
+	WORD   e_magic;                     // Magic number
+	WORD   e_cblp;                      // Bytes on last page of file
+	WORD   e_cp;                        // Pages in file
+	WORD   e_crlc;                      // Relocations
+	WORD   e_cparhdr;                   // Size of header in paragraphs
+	WORD   e_minalloc;                  // Minimum extra paragraphs needed
+	WORD   e_maxalloc;                  // Maximum extra paragraphs needed
+	WORD   e_ss;                        // Initial (relative) SS value
+	WORD   e_sp;                        // Initial SP value
+	WORD   e_csum;                      // Checksum
+	WORD   e_ip;                        // Initial IP value
+	WORD   e_cs;                        // Initial (relative) CS value
+	WORD   e_lfarlc;                    // File address of relocation table
+	WORD   e_ovno;                      // Overlay number
+	WORD   e_res[4];                    // Reserved words
+	WORD   e_oemid;                     // OEM identifier (for e_oeminfo)
+	WORD   e_oeminfo;                   // OEM information; e_oemid specific
+	WORD   e_res2[10];                  // Reserved words
+	LONG   e_lfanew;                    // File address of new exe header
+} IMAGE_DOS_HEADER, * PIMAGE_DOS_HEADER;
+
+typedef struct _PE_HEADER {
+	IMAGE_DOS_HEADER dos_header;
+} DOS_HEADER, * PDOS_HEADER;
+
+
+typedef struct __PE_HEADER {
+	PE_HEADER standardHeader;
+	IMAGE_OPTIONAL_HEADER optionalHeader;
+} PE_HEADER_FULL, * PPE_HEADER_FULL;
+
+
+
+typedef struct _PE_EXPORT_DIRECTORY_TABLE {
+
+	UINT32 Characteristics;
+	UINT32 TimeDateStamp;
+	UINT16 MajorVersion;
+	UINT16 MinorVersion;
+	UINT32 Name;
+	UINT32 Base;
+	UINT32 NumberOfFunctions;
+	UINT32 NumberOfNames; //size of the array pointer by address of names
+	UINT32 AddressOfFunctionsRVA;
+	UINT32 AddressOfNamesRVA;
+	UINT32 AddressOfNameOrdinalsRVA;
+} EXPORT_DIRECTORY_TABLE, * PEXPORT_DIRECTORY_TABLE;
+
+typedef struct _PE_EXPORT_ADDRESS_TABLE {
+	union _ANON
+	{
+		UINT32 ExportRVA;
+		UINT32 ForwarderRVA;
+	};
+} EXPORT_ADDRESS_TABLE, * PEXPORT_ADDRESS_TABLE;
+
+typedef struct _PE_EXPORT_NAME_TABLE {
+
+	UINT32 NameRVA;
+
+} EXPORT_NAME_TABLE, * PEXPORT_NAME_TABLE;
+
+typedef struct _PE_ORDINAL_EXPORT_TABLE {
+	UINT16 functionIndex;
+} EXPORT_ORDINAL_TABLE,* PEXPORT_ORDINAL_TABLE;
+
+
+
+
+#define EXPORT_DIRECTORY_INDEX 0
 #define IMPORT_TABLE_INDEX 1
 #define IAT_TABLE_OFFSET_RAW 120
 #define PE_32_PLUS_DIRECTORY_START_OFFSET 112

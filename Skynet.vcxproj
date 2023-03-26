@@ -121,6 +121,7 @@
     <ClInclude Include="offsets.h" />
     <ClInclude Include="patterns.h" />
     <ClInclude Include="PEparse.h" />
+    <ClInclude Include="SharedData.h" />
     <ClInclude Include="Utils.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

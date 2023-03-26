@@ -5,6 +5,7 @@
 #include "Common.h"
 #include "Utils.h"
 #include "patterns.h"
+#include "SharedData.h"
 //#include "defs.h"
 
 
@@ -24,8 +25,7 @@ static PEPROCESS attachedProcess;
 #pragma alloc_text(PAGE, DriverUnload)
 
 
-static ULONGLONG KERNEL_BASE = 0;
-
+ 
 
 
 
@@ -219,9 +219,20 @@ DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
 	//	DbgPrintEx(0, 0, "[SKYNET] : findPattern returned [0x%llx]\n", patternAddress);
 	UNICODE_STRING fileName;
 	RtlInitUnicodeString(&fileName, MAPPED_DRIVER_PATH);
+	ULONG64 ntoskrnlBase = 0;
+	NTSTATUS kernelBaseOutcome = findModuleByName(L"ntoskrnl.exe", &KERNEL_BASE);
+	if (!NT_SUCCESS(kernelBaseOutcome))
+	{
+#ifdef DEBUG
+		DbgPrint("[SKYNET] : failed to find kernel module address\n");
+#endif // 
+		return STATUS_SUCCESS;
+	}
+
+
 	ULONG64 executableStartAddress = 0;
 	ULONG64 fileSize;
-	NTSTATUS loadOutcome = loadExecutableInKernelMemory(&fileName, &executableStartAddress,&fileSize);
+	NTSTATUS loadOutcome = loadExecutableInKernelMemory(&fileName, &executableStartAddress, &fileSize);
 	if (!NT_SUCCESS(loadOutcome)) {
 #ifdef DEBUG
 		DbgPrint("[SKYNET] : Failed to load manually mapped driver\n");

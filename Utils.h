@@ -1,5 +1,7 @@
 #pragma once
 #include "defs.h"
+#include "SharedData.h"
+
 
 static ULONG64 keys[10];
 void initKeys();
@@ -116,15 +118,23 @@ NTSTATUS parsePEHeader(_In_ ULONG64 executableStartAddress) {
 	PIMPORT_TABLE_BREAKDOWN lookupBreakdown;
 	char* currentHint;
 	char* dependencyModuleName;
-#define IS_VALID_IMPORT(a) a->importLookupTableRVA != 0
-	DbgPrintEx(0, 0, "isValidimport %d\n", IS_VALID_IMPORT(importDirectoryTable));
 	auto i = 0;
 	auto j = 0;
-	while (IS_VALID_IMPORT(importDirectoryTable) && i++ < 2) {
+	PIMAGE_DOS_HEADER dosHeader = (PIMAGE_DOS_HEADER)KERNEL_BASE;
+	PPE_HEADER_FULL krnlPeHeader = (PPE_HEADER_FULL)(KERNEL_BASE + dosHeader->e_lfanew);
+	IMAGE_DATA_DIRECTORY exportDirectory = krnlPeHeader->optionalHeader.imageDataDirectory[EXPORT_DIRECTORY_INDEX];
+	PEXPORT_DIRECTORY_TABLE table = (PEXPORT_DIRECTORY_TABLE)(KERNEL_BASE + exportDirectory.VirtualAddressOffset);
+	PEXPORT_ADDRESS_TABLE exportAddressTable = (PEXPORT_ADDRESS_TABLE)(KERNEL_BASE + table->AddressOfFunctionsRVA);
+	PEXPORT_NAME_TABLE exportNameTable = (PEXPORT_NAME_TABLE)(KERNEL_BASE + table->AddressOfNamesRVA);
+	PEXPORT_ORDINAL_TABLE ordinalExportTable = (PEXPORT_ORDINAL_TABLE)(KERNEL_BASE + table->AddressOfNameOrdinalsRVA);
+	while (importDirectoryTable->importAddressRVA != 0 && i++ < 15) {
 		dependencyModuleName = (char*)(imageBase + importDirectoryTable->Name);
 		importLookupTable = (PIMPORT_LOOKUP_TABLE)(imageBase + importDirectoryTable->importLookupTableRVA);
 		importAddressTable = (PIMPORT_ADDRESS_TABLE)(imageBase + importDirectoryTable->importAddressRVA);
 		lookupBreakdown = (PIMPORT_TABLE_BREAKDOWN)importLookupTable;
+		/*find the needed module*/
+
+
 		j = 0;
 		ULONG64 currentRow = importLookupTable->entry[j];
 		DbgPrintEx(0, 0, "[SKYNET] : [current entry : %#llx]\n", currentRow);
@@ -133,11 +143,21 @@ NTSTATUS parsePEHeader(_In_ ULONG64 executableStartAddress) {
 			else
 			{
 				currentHint = ((char*)imageBase + lookupBreakdown->lowest32bits.nameRVA) + 2;
-				DbgPrintEx(0, 0, "[SKYNET] [module][%s] [current hint][%s]\n", dependencyModuleName, currentHint);
+				for (auto i = 0; i < table->NumberOfNames; i++) {
+					char* currentExportedFunctionName = (char*)KERNEL_BASE + exportNameTable[i].NameRVA;
+					if (strcmp(currentExportedFunctionName, currentHint) == 0)
+					{
+						short functionIndex = ordinalExportTable[i].functionIndex;
+						ULONG64 resolvedFunctionAddress = KERNEL_BASE + exportAddressTable[functionIndex].ExportRVA;
+						DbgPrintEx(0, 0, "[SKYNET] : Exported function [%d] name [%s] - address [%#llx]\n"
+							, i
+							, currentExportedFunctionName
+							, resolvedFunctionAddress);
+					}
+				}
 			}
 			currentRow = importLookupTable->entry[++j];
 			lookupBreakdown = &currentRow;
-			__debugbreak();
 		}
 		importDirectoryTable++;
 	}
@@ -189,7 +209,7 @@ BOOLEAN isSubstringUnicode(_In_ PUNICODE_STRING original, _In_ PUNICODE_STRING s
 #endif // DEBUG_UTILS
 
 		return FALSE;
-	}
+}
 	unsigned char* orig = (unsigned char*)original->Buffer, * sub = (unsigned char*)substring->Buffer;
 	short maxLength = min(original->Length, substring->Length);
 	if (maxLength == 0 && substring->Length != 0) return FALSE;
